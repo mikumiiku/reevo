@@ -36,6 +36,7 @@ dependencies = [
     "typing_extensions>=4.9.0",
     "pip>=24.0.1",
     "hydra-colorlog>=1.2.0",
+    "torch>=2.6.0",
 ]
 
 [project.optional-dependencies]

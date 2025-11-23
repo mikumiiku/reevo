@@ -1,0 +1,9 @@
+_target_: utils.llm_client.lmstudio.LMStudioClient
+
+# LM Studio local server configuration
+# Make sure LM Studio is running and the local server is started
+# Default LM Studio server runs at http://127.0.0.1:1234
+model: qwen/qwen3-1.7b  # Replace with your actual model name loaded in LM Studio
+temperature: 1.0  # temperature for chat completion
+api_key: lm-studio  # LM Studio doesn't require a real API key
+base_url: http://172.30.112.1:1234/v1  # Default LM Studio local server URL
