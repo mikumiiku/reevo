@@ -1,7 +1,7 @@
 defaults:
   - _self_
   - problem: tsp_aco
-  - llm_client: openai
+  - llm_client: bailian
   # [Optional] set different clients for operators
   - llm_client@llm_long_ref: null
   - llm_client@llm_short_ref: null
@@ -26,3 +26,12 @@ init_pop_size: 30 # initial population size for GA
 mutation_rate: 0.5 # mutation rate for GA
 timeout: 20 # timeout for evaluation of a single heuristic
 diversify_init_pop: True # whether to diversify the initial population
+
+# Lineage-based selection parameters (inspired by HGM's CMP)
+enable_lineage_selection: true # whether to use lineage-aware selection
+elite_ratio: 0.5 # ratio of elite selection (best individuals)
+lineage_ratio: 0.3 # ratio of lineage selection (based on CMP score)
+revival_ratio: 0.2 # ratio of revival selection (diversity maintenance)
+clade_score_alpha: 0.5 # weight for best descendant in CMP score
+clade_score_beta: 0.3 # weight for average performance in CMP score
+clade_score_gamma: 0.2 # weight for diversity bonus in CMP score

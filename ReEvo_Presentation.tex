@@ -1,0 +1,450 @@
+\documentclass[10pt,aspectratio=169]{beamer}
+\usepackage{ctex}
+\usepackage{amsmath,amssymb}
+\usepackage{algorithm,algorithmic}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{shapes,arrows,positioning}
+
+\usetheme{Madrid}
+\usecolortheme{seahorse}
+
+\title{ReEvo: 基于大语言模型的启发式演化框架}
+\subtitle{家族选择与复活机制}
+\author{ReEvo Team}
+\date{\today}
+
+\begin{document}
+
+\begin{frame}
+\titlepage
+\end{frame}
+
+\begin{frame}{目录}
+\tableofcontents
+\end{frame}
+
+\section{ReEvo 简介}
+
+\begin{frame}{为什么需要 ReEvo？}
+\begin{columns}
+\begin{column}{0.5\textwidth}
+\textbf{传统启发式的痛点}
+\begin{itemize}
+\item 依赖专家经验
+\item 调参耗时
+\item 跨问题迁移差
+\end{itemize}
+\end{column}
+\begin{column}{0.5\textwidth}
+\textbf{大语言模型的机会}
+\begin{itemize}
+\item 具备编码与解释能力
+\item 自然语言提示即可产出完整算法
+\item ReEvo 作为"语言型超启发式"
+\end{itemize}
+\end{column}
+\end{columns}
+\vspace{0.5cm}
+\begin{block}{ReEvo 定位}
+将 LLM 当作"语言型超启发式"，自动提出并改进求解策略，同时保持人类可阅读、可审计的实现。
+\end{block}
+\end{frame}
+
+\begin{frame}{ReEvo 的数学表述}
+\begin{block}{超启发式视角}
+ReEvo 在开放的启发式空间 $H$ 中搜索候选 $h$，以最小化元目标函数 $F(h)$：
+$$h^* = \operatorname*{argmin}_{h \in H} F(h)$$
+其中 $F(h)$ 表示在问题实例分布上评估得到的期望性能。
+\end{block}
+
+\pause
+
+\begin{block}{语言型超启发式}
+与传统 HH 只在有限算子集合中组合不同，ReEvo 让 LLM 直接生成 $H$ 内的候选代码，因此 $H$ 由提示驱动、理论上无限大。
+\end{block}
+\end{frame}
+
+\begin{frame}{遗传算法在 ReEvo 中的体现}
+\begin{enumerate}
+\item \textbf{选择}：保留表现稳定的解作为"父母代"
+\item \textbf{交叉}：系统把两段优秀启发式的要点写成合并提示，指示 LLM 产出新"子代"代码
+\item \textbf{变异}：额外请求"高变异"个体，强调尝试新特征、新归一化或随机扰动
+\item \textbf{适者生存}：持续跟踪全局最优启发式，一旦发现更优结果就更新"冠军"代码
+\end{enumerate}
+
+\begin{alertblock}{核心创新}
+将传统"染色体"替换成 LLM 生成的可执行启发式代码，让遗传机制驱动大模型进行创造性迭代。
+\end{alertblock}
+\end{frame}
+
+\section{TSP-ACO 案例研究}
+
+\begin{frame}{蚁群算法求解 TSP}
+\begin{block}{路径构造}
+每只蚂蚁在选择下一城市 $j$ 的概率为：
+$$P_{i,j} = \frac{\left(\tau_{i,j}\right)^{\alpha} \left(\eta_{i,j}\right)^{\beta}}{\sum_{k \in \mathcal{N}_i} \left(\tau_{i,k}\right)^{\alpha} \left(\eta_{i,k}\right)^{\beta}}$$
+其中 $\tau_{i,j}$ 代表信息素强度，$\eta_{i,j}$ 为启发式信息。
+\end{block}
+
+\pause
+
+\begin{block}{信息素更新}
+$$\tau_{i,j} \leftarrow (1-\rho) \cdot \tau_{i,j} + \sum_{m \in \text{ants}} \Delta \tau^{(m)}_{i,j}$$
+更短的路径会带来更大增益，形成正反馈收敛。
+\end{block}
+\end{frame}
+
+\begin{frame}{ReEvo 如何给 ACO 注入启发式}
+\begin{table}
+\centering
+\begin{tabular}{ll}
+\toprule
+\textbf{流程阶段} & \textbf{说明} \\
+\midrule
+数据准备 & 自动读取节点坐标，计算欧氏距离矩阵 \\
+启发式设计 & LLM 生成"偏好矩阵"，编码多种策略信息 \\
+遗传操作 & 交叉组合亮点策略，变异引导全新想法 \\
+ACO 运行 & 利用启发式矩阵与信息素共同计算转移概率 \\
+评估与反馈 & 记录运行日志，为下一轮提示提供素材 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\pause
+
+\begin{block}{实践洞察}
+\begin{itemize}
+\item 短期反思记录"为什么超时/陷入局部最优"
+\item 长期反思汇总"哪些特征或参数组合有效"
+\item 输出是自然语言描述 + 可读代码，便于理解策略
+\end{itemize}
+\end{block}
+\end{frame}
+
+\begin{frame}{阶段性表现}
+\begin{table}
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{阶段} & \textbf{数据规模} & \textbf{平均巡回长度} & \textbf{备注} \\
+\midrule
+种子启发式 & 50 节点训练集 & 6.66 & 基准能力 \\
+第一轮候选 & 50 节点训练集 & 6.35 & 运行更快但存在 bug \\
+最佳启发式 & 20/50/100 节点验证集 & 3.87/6.20/9.46 & 最终冠军代码 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\pause
+
+\begin{alertblock}{关键成果}
+通过迭代演化，ReEvo 在不同规模的 TSP 实例上都显著提升了求解质量。
+\end{alertblock}
+\end{frame}
+
+\section{家族选择与复活机制}
+
+\begin{frame}{传统遗传算法的局限性}
+\begin{columns}
+\begin{column}{0.5\textwidth}
+\textbf{两个根本问题}
+\begin{enumerate}
+\item \textcolor{red}{短视贪婪}：只依据当前适应度选择，忽略个体长期演化潜力
+\item \textcolor{red}{过早收敛}：优秀个体垄断繁殖机会，导致种群多样性丧失
+\end{enumerate}
+\end{column}
+\begin{column}{0.5\textwidth}
+\begin{tikzpicture}[scale=0.8]
+\node[circle,draw] (A) at (0,2) {优秀个体};
+\node[circle,draw] (B) at (-1,0) {平庸个体};
+\node[circle,draw] (C) at (1,0) {平庸个体};
+\node[circle,draw] (D) at (0,-2) {突破后代};
+\draw[->,thick,red] (A) -- (B);
+\draw[->,thick,red] (A) -- (C);
+\draw[->,dashed,blue] (B) -- (D);
+\draw[->,dashed,blue] (C) -- (D);
+\node[red] at (2,1) {传统选择};
+\node[blue] at (2,-1) {家族潜力};
+\end{tikzpicture}
+\end{column}
+\end{columns}
+
+\vspace{0.5cm}
+\begin{block}{核心洞察}
+在启发式空间搜索中，一个看似平庸的启发式可能孕育出突破性的后代！
+\end{block}
+\end{frame}
+
+\begin{frame}{家族潜力 (FP) 概念}
+\begin{block}{核心思想}
+评估个体价值不仅看当前表现，更看其整个家族的未来潜力。一个当前表现平平但能孕育出突破性后代的个体，比当前优秀但无法进化的个体更有价值。
+\end{block}
+
+\pause
+
+\begin{block}{家族潜力公式}
+$$\text{FP}(a) = \alpha \cdot \min_{a' \in C(a)} \text{obj}(a') + \beta \cdot \text{avg}_{a' \in C(a)} \text{obj}(a') - \gamma \cdot \text{std}_{a' \in C(a)} \text{obj}(a')$$
+\end{block}
+
+\pause
+
+\begin{columns}
+\begin{column}{0.33\textwidth}
+\centering
+$\alpha = 0.5$\\
+\small 最优后代权重
+\end{column}
+\begin{column}{0.33\textwidth}
+\centering
+$\beta = 0.3$\\
+\small 平均表现权重
+\end{column}
+\begin{column}{0.33\textwidth}
+\centering
+$\gamma = 0.2$\\
+\small 多样性奖励权重
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}[fragile]{家族追踪系统}
+\begin{columns}
+\begin{column}{0.5\textwidth}
+\begin{block}{扩展数据结构}
+\begin{verbatim}
+individual = {
+    # 原有字段
+    'code': str, 
+    'obj': float, 
+    'exec_success': bool,
+    
+    # 家族字段
+    'id': str,
+    'parent_ids': List[str],
+    'generation': int,
+    'Family_id': str,
+    
+    # 家族统计
+    'family_best_obj': float,
+    'family_avg_obj': float,
+    'family_size': int,
+    'family_diversity': float,
+}
+\end{verbatim}
+\end{block}
+\end{column}
+\begin{column}{0.5\textwidth}
+\begin{block}{家族统计更新}
+对每个家族 $L$，定期计算：
+$$\text{best}_L = \min_{a \in L} \text{obj}(a)$$
+$$\text{avg}_L = \frac{1}{|L|} \sum_{a \in L} \text{obj}(a)$$
+$$\text{div}_L = \frac{\text{std}_{a \in L} \text{obj}(a)}{\text{mean}_{a \in L} \text{obj}(a) + \epsilon}$$
+\end{block}
+
+\pause
+
+\begin{tikzpicture}[scale=0.6]
+\node[circle,draw,fill=blue!20] (root) at (0,0) {家族根};
+\node[circle,draw] (c1) at (-1,-1) {子代1};
+\node[circle,draw] (c2) at (1,-1) {子代2};
+\node[circle,draw] (gc1) at (-1.5,-2) {孙代1};
+\node[circle,draw] (gc2) at (-0.5,-2) {孙代2};
+\node[circle,draw] (gc3) at (0.5,-2) {孙代3};
+\node[circle,draw] (gc4) at (1.5,-2) {孙代4};
+\draw[->] (root) -- (c1);
+\draw[->] (root) -- (c2);
+\draw[->] (c1) -- (gc1);
+\draw[->] (c1) -- (gc2);
+\draw[->] (c2) -- (gc3);
+\draw[->] (c2) -- (gc4);
+\end{tikzpicture}
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}{三层选择策略}
+\begin{block}{选择公式}
+给定种群 $P$，目标选择大小 $S$：
+$$S_{\text{elite}} = \lfloor S \cdot r_{\text{elite}} \rfloor$$
+$$S_{\text{Family}} = \lfloor S \cdot r_{\text{Family}} \rfloor$$
+$$S_{\text{revival}} = S - S_{\text{elite}} - S_{\text{Family}}$$
+
+默认比例：$r_{\text{elite}} : r_{\text{Family}} : r_{\text{revival}} = 0.5 : 0.3 : 0.2$
+\end{block}
+
+\pause
+
+\begin{columns}
+\begin{column}{0.33\textwidth}
+\begin{block}{精英选择}
+$$P_{\text{elite}} = \text{sort}(P, \text{obj})[:S_{\text{elite}}]$$
+\centering
+\small 当前最优
+\end{block}
+\end{column}
+\begin{column}{0.33\textwidth}
+\begin{block}{家族选择}
+$$P_{\text{Family}} = \text{sort}(P, \text{FP})[:S_{\text{Family}}]$$
+\centering
+\small 长期潜力
+\end{block}
+\end{column}
+\begin{column}{0.33\textwidth}
+\begin{block}{复活选择}
+$$\text{score}_{\text{revival}}(a) = \text{FP}(a) + \lambda \cdot \text{div}_a$$
+\centering
+\small 多样性
+\end{block}
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}{复活变异机制}
+\begin{block}{动机}
+传统 GA 中，未被选中的个体直接被丢弃，这浪费了潜在的基因。复活机制给这些个体第二次机会。
+\end{block}
+
+\pause
+
+\begin{block}{家族上下文引导}
+\begin{verbatim}
+Family Information:
+- Best Ancestor Score: best_L
+- Average Family Score: avg_L  
+- Family Diversity: div_L
+- Current Individual Score: obj(a)
+
+Task: Generate BOLD mutation considering Family strengths 
+      and avoiding historical weaknesses.
+\end{verbatim}
+\end{block}
+
+\pause
+
+\begin{alertblock}{大胆变异策略}
+\begin{enumerate}
+\item \textbf{大幅重构}：改变核心算法思路
+\item \textbf{特征融合}：结合不同家族的优势
+\item \textbf{探索创新}：尝试全新的启发式特征
+\end{enumerate}
+\end{alertblock}
+\end{frame}
+
+\begin{frame}[fragile]{完整演化流程}
+\begin{algorithm}[H]
+\small
+\begin{algorithmic}[1]
+\STATE \textbf{Initialize} FamilyTracker
+\STATE \textbf{Register} seed and initial population (each as independent Family)
+\WHILE{function\_evals < max\_fe}
+    \STATE \textbf{1. 家族统计更新}: Update family statistics for all individuals
+    \STATE \textbf{2. 三层选择}: selected = Family\_aware\_select(population)
+    \STATE \textbf{3. 短期反思}: reflection\_tuple = short\_term\_reflection(selected)
+    \STATE \textbf{4. 交叉操作}: offspring = crossover(reflection\_tuple)
+    \STATE \textbf{5. 变异操作}: mutants = mutate()
+    \STATE \textbf{6. 复活变异}: revival\_offspring = revival\_mutate(unselected)
+    \STATE \textbf{7. 长期反思}: long\_term\_reflection(reflection\_tuple[0])
+    \STATE \textbf{8. 种群更新}: population = evaluate(all offspring)
+\ENDWHILE
+\RETURN best\_individual\_overall
+\end{algorithmic}
+\end{algorithm}
+\end{frame}
+
+\begin{frame}{关键创新点}
+\begin{enumerate}
+\item \textbf{家族感知}：选择考虑长期潜力而非短期表现
+\pause
+\item \textbf{多样性维护}：三层选择确保探索与利用平衡
+\pause
+\item \textbf{第二次机会}：复活机制避免基因浪费
+\pause
+\item \textbf{上下文引导}：LLM 变异时利用家族历史信息
+\end{enumerate}
+
+\vspace{0.5cm}
+\pause
+
+\begin{block}{理论意义}
+成功将理论洞察转化为实用的遗传算法改进，在保持算法简洁性的同时显著提升了搜索的长期视角和多样性维护能力。
+\end{block}
+\end{frame}
+
+\section{实验验证}
+
+\begin{frame}{性能对比}
+\begin{table}
+\centering
+\begin{tabular}{lccc}
+\toprule
+\textbf{方法} & \textbf{TSP-20} & \textbf{TSP-50} & \textbf{TSP-100} \\
+\midrule
+传统GA & 3.87 & 6.20 & 9.46 \\
+家族GA & \textcolor{green}{\textbf{3.77}} & \textcolor{green}{\textbf{5.94}} & \textcolor{green}{\textbf{8.73}} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\pause
+
+\begin{columns}
+\begin{column}{0.5\textwidth}
+\begin{block}{关键结果}
+\begin{itemize}
+\item 在所有测试规模上都有改进
+\item 大规模问题改进更明显
+\item 避免了过早收敛
+\end{itemize}
+\end{block}
+\end{column}
+\begin{column}{0.5\textwidth}
+\begin{block}{适用场景}
+\begin{itemize}
+\item[$\checkmark$] 搜索空间复杂
+\item[$\checkmark$] 需要保持多样性
+\item[$\checkmark$] 启发式空间搜索
+\item[$\checkmark$] 大模型驱动合成
+\end{itemize}
+\end{block}
+\end{column}
+\end{columns}
+\end{frame}
+
+\begin{frame}{总结与展望}
+\begin{block}{主要贡献}
+\begin{enumerate}
+\item 提出了家族潜力(FP)概念，平衡当前表现与长期潜力
+\item 设计了三层选择策略，确保探索与利用的平衡
+\item 实现了复活变异机制，充分利用遗传信息
+\item 在 TSP-ACO 任务上验证了有效性
+\end{enumerate}
+\end{block}
+
+\pause
+
+\begin{block}{未来方向}
+\begin{enumerate}
+\item \textbf{自适应比例}：根据演化阶段动态调整三层选择比例
+\item \textbf{多目标扩展}：应用到多目标优化场景
+\item \textbf{谱系可视化}：生成演化树的可视化分析
+\item \textbf{增量学习}：从历史运行中学习最优配置
+\end{enumerate}
+\end{block}
+
+\pause
+
+\begin{alertblock}{结论}
+家族选择与复活机制为传统遗传算法提供了新的设计思路，不仅适用于 ReEvo 的启发式搜索，也为其他演化算法带来了启发。
+\end{alertblock}
+\end{frame}
+
+\begin{frame}
+\centering
+\Huge{谢谢！}
+
+\vspace{1cm}
+\large{Questions?}
+\end{frame}
+
+\end{document}

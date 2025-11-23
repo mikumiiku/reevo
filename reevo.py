@@ -7,6 +7,7 @@ from omegaconf import DictConfig
 
 from utils.utils import *
 from utils.llm_client.base import BaseClient
+from utils.lineage_tracker import LineageTracker
 
 
 class ReEvo:
@@ -43,6 +44,22 @@ class ReEvo:
         self.best_obj_overall = None
         self.best_code_overall = None
         self.best_code_path_overall = None
+        
+        # 初始化谱系追踪器
+        self.lineage_tracker = LineageTracker()
+        
+        # 谱系选择配置（从config读取，提供默认值）
+        self.enable_lineage_selection = cfg.get('enable_lineage_selection', True)
+        self.elite_ratio = cfg.get('elite_ratio', 0.5)
+        self.lineage_ratio = cfg.get('lineage_ratio', 0.3)
+        self.revival_ratio = cfg.get('revival_ratio', 0.2)
+        self.clade_score_alpha = cfg.get('clade_score_alpha', 0.5)
+        self.clade_score_beta = cfg.get('clade_score_beta', 0.3)
+        self.clade_score_gamma = cfg.get('clade_score_gamma', 0.2)
+        
+        logging.info(f"Lineage selection enabled: {self.enable_lineage_selection}")
+        if self.enable_lineage_selection:
+            logging.info(f"Selection ratios - Elite: {self.elite_ratio}, Lineage: {self.lineage_ratio}, Revival: {self.revival_ratio}")
         
         self.init_prompt()
         self.init_population()
@@ -111,6 +128,7 @@ class ReEvo:
             "code_path": f"problem_iter{self.iteration}_code0.py",
             "code": code,
             "response_id": 0,
+            "birth_iteration": self.iteration,
         }
         self.seed_ind = seed_ind
         self.population = self.evaluate_population([seed_ind])
@@ -118,6 +136,10 @@ class ReEvo:
         # If seed function is invalid, stop
         if not self.seed_ind["exec_success"]:
             raise RuntimeError(f"Seed function is invalid. Please check the stdout file in {os.getcwd()}.")
+
+        # 注册种子个体到谱系追踪器
+        self.lineage_tracker.register_individual(self.seed_ind, parents=None)
+        logging.info(f"Registered seed individual to lineage tracker")
 
         self.update_iter()
         
@@ -132,6 +154,11 @@ class ReEvo:
 
         # Run code and evaluate population
         population = self.evaluate_population(population)
+
+        # 注册初始种群到谱系追踪器（每个建立独立谱系）
+        for ind in population:
+            self.lineage_tracker.register_individual(ind, parents=None)
+        logging.info(f"Registered {len(population)} initial individuals to lineage tracker")
 
         # Update iteration
         self.population = population
@@ -157,6 +184,7 @@ class ReEvo:
             "code_path": f"problem_iter{self.iteration}_code{response_id}.py",
             "code": code,
             "response_id": response_id,
+            "birth_iteration": self.iteration,
         }
         return individual
 
@@ -322,6 +350,122 @@ class ReEvo:
                 return None
         return selected_population
 
+    def lineage_aware_select(self, population: list[dict]) -> list[dict]:
+        """
+        基于谱系的选择策略：结合精英选择、谱系选择和多样性维护
+        
+        选择策略：
+        - elite_ratio: 直接选择当前最优个体
+        - lineage_ratio: 根据CMP分数选择有潜力的谱系代表
+        - revival_ratio: 基于多样性选择，给失败谱系机会
+        """
+        # 过滤有效个体
+        if self.problem_type == "black_box":
+            valid_pop = [ind for ind in population if ind.get("exec_success", False) and ind["obj"] < self.seed_ind["obj"]]
+        else:
+            valid_pop = [ind for ind in population if ind.get("exec_success", False)]
+        
+        if len(valid_pop) < 2:
+            logging.warning("Not enough valid individuals for lineage-aware selection")
+            return None
+        
+        # 更新所有个体的谱系统计
+        for ind in valid_pop:
+            if 'id' in ind:
+                self.lineage_tracker.update_clade_stats(ind['id'])
+        
+        target_size = 2 * self.cfg.pop_size
+        
+        # 1. 精英选择
+        elite_count = max(1, int(target_size * self.elite_ratio))
+        sorted_pop = sorted(valid_pop, key=lambda x: x["obj"])
+        elite_selected = sorted_pop[:elite_count]
+        logging.info(f"Elite selection: {elite_count} individuals, best obj: {elite_selected[0]['obj']:.6f}")
+        
+        # 2. 谱系选择（基于CMP分数）
+        lineage_count = max(1, int(target_size * self.lineage_ratio))
+        # 按谱系分数排序
+        lineage_sorted = sorted(
+            valid_pop, 
+            key=lambda x: self.lineage_tracker.compute_clade_score(
+                x['id'], 
+                self.clade_score_alpha, 
+                self.clade_score_beta, 
+                self.clade_score_gamma
+            ) if 'id' in x else float('inf')
+        )
+        lineage_selected = lineage_sorted[:lineage_count]
+        
+        # 记录谱系选择的统计信息
+        if lineage_selected and 'id' in lineage_selected[0]:
+            best_clade_score = self.lineage_tracker.compute_clade_score(
+                lineage_selected[0]['id'],
+                self.clade_score_alpha,
+                self.clade_score_beta,
+                self.clade_score_gamma
+            )
+            logging.info(f"Lineage selection: {lineage_count} individuals, best clade score: {best_clade_score:.6f}")
+        
+        # 3. 复活/多样性选择
+        revival_count = max(1, int(target_size * self.revival_ratio))
+        already_selected_ids = set([ind.get('id') for ind in elite_selected + lineage_selected if 'id' in ind])
+        revival_candidates = [ind for ind in valid_pop if ind.get('id') not in already_selected_ids]
+        
+        if revival_candidates:
+            # 基于多样性和谱系潜力选择
+            revival_scores = []
+            for ind in revival_candidates:
+                if 'id' in ind:
+                    clade_score = self.lineage_tracker.compute_clade_score(
+                        ind['id'],
+                        self.clade_score_alpha,
+                        self.clade_score_beta,
+                        self.clade_score_gamma
+                    )
+                    diversity_bonus = ind.get('clade_diversity', 0.0) * 0.5
+                    revival_scores.append((ind, clade_score + diversity_bonus))
+                else:
+                    revival_scores.append((ind, float('inf')))
+            
+            revival_sorted = sorted(revival_scores, key=lambda x: x[1])
+            revival_selected = [x[0] for x in revival_sorted[:revival_count]]
+            logging.info(f"Revival selection: {len(revival_selected)} individuals for diversity")
+        else:
+            revival_selected = []
+            logging.info("No revival candidates available")
+        
+        # 合并选择结果
+        selected = elite_selected + lineage_selected + revival_selected
+        
+        # 去重（基于ID）
+        seen_ids = set()
+        unique_selected = []
+        for ind in selected:
+            ind_id = ind.get('id')
+            if ind_id and ind_id not in seen_ids:
+                seen_ids.add(ind_id)
+                unique_selected.append(ind)
+        
+        # 如果数量不足，从精英中补充
+        while len(unique_selected) < target_size and len(sorted_pop) > 0:
+            for ind in sorted_pop:
+                if ind.get('id') not in seen_ids:
+                    unique_selected.append(ind)
+                    seen_ids.add(ind.get('id'))
+                    if len(unique_selected) >= target_size:
+                        break
+            break
+        
+        # 确保至少有2个个体用于交叉
+        if len(unique_selected) < 2:
+            logging.warning("Not enough unique individuals after lineage selection")
+            return None
+        
+        result = unique_selected[:target_size]
+        logging.info(f"Total selected: {len(result)} individuals")
+        
+        return result
+
     def gen_short_term_reflection_prompt(self, ind1: dict, ind2: dict) -> tuple[list[dict], str, str]:
         """
         Short-term reflection before crossovering two individuals.
@@ -362,7 +506,8 @@ class ReEvo:
         messages_lst = []
         worse_code_lst = []
         better_code_lst = []
-        for i in range(0, len(population), 2):
+        # Handle odd-sized populations by skipping the last unpaired individual
+        for i in range(0, len(population) - 1, 2):
             # Select two individuals
             parent_1 = population[i]
             parent_2 = population[i+1]
@@ -434,7 +579,7 @@ class ReEvo:
         response_lst = self.crossover_llm.multi_chat_completion(messages_lst)
         crossed_population = [self.response_to_individual(response, response_id) for response_id, response in enumerate(response_lst)]
 
-        assert len(crossed_population) == self.cfg.pop_size
+        assert len(crossed_population) == len(messages_lst), f"Expected {len(messages_lst)} offspring, got {len(crossed_population)}"
         return crossed_population
 
 
@@ -457,31 +602,154 @@ class ReEvo:
         population = [self.response_to_individual(response, response_id) for response_id, response in enumerate(responses)]
         return population
 
+    def revival_mutate(self, individual: dict) -> dict:
+        """
+        对未被选中的个体进行强化变异，给予复活机会
+        
+        与常规变异的区别：
+        1. 使用谱系上下文信息指导变异
+        2. 鼓励更大胆的探索（BOLD mutation）
+        3. 从谱系历史中学习
+        """
+        system = self.system_generator_prompt
+        func_signature1 = self.func_signature.format(version=1)
+        
+        # 获取谱系上下文
+        lineage_context = ""
+        if 'id' in individual:
+            lineage_context = self.lineage_tracker.get_lineage_context(individual['id'])
+        
+        # 构建复活变异提示
+        user = f"""This individual was not selected in the current generation, but shows potential based on its lineage history.
+
+{lineage_context}
+
+Current Code:
+```python
+{filter_code(individual['code'])}
+```
+
+Task: Generate a BOLD mutation that explores significantly different approaches while learning from the lineage history.
+Make LARGER changes than typical mutation to give this individual a real chance at revival.
+Consider:
+1. What made the best ancestors in this lineage successful?
+2. What patterns should be avoided based on lineage performance?
+3. How can you introduce novel ideas while maintaining the core strengths?
+
+{self.user_generator_prompt}
+
+Reflection and Knowledge:
+{self.long_term_reflection_str}
+{self.external_knowledge}
+
+Function Signature:
+{func_signature1}
+
+Generate a significantly improved version with bold innovations:
+"""
+        
+        messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+        
+        # 生成复活变异
+        response = self.mutation_llm.multi_chat_completion([messages], 1)[0]
+        
+        # 创建新个体
+        revival_ind = self.response_to_individual(response, f"revival_{individual.get('response_id', 'unknown')}")
+        
+        return revival_ind
+
 
     def evolve(self):
         while self.function_evals < self.cfg.max_fe:
             # If all individuals are invalid, stop
             if all([not individual["exec_success"] for individual in self.population]):
                 raise RuntimeError(f"All individuals are invalid. Please check the stdout files in {os.getcwd()}.")
-            # Select
-            population_to_select = self.population if (self.elitist is None or self.elitist in self.population) else [self.elitist] + self.population # add elitist to population for selection
-            selected_population = self.random_select(population_to_select)
+            
+            # Select - 使用谱系感知选择或传统选择
+            population_to_select = self.population if (self.elitist is None or self.elitist in self.population) else [self.elitist] + self.population
+            
+            if self.enable_lineage_selection:
+                logging.info("=== Using Lineage-Aware Selection ===")
+                selected_population = self.lineage_aware_select(population_to_select)
+                
+                # 复活机制：对未被选中的个体
+                if selected_population is not None:
+                    selected_ids = set([ind.get('id') for ind in selected_population if 'id' in ind])
+                    unselected = [ind for ind in population_to_select 
+                                 if ind.get('exec_success', False) and ind.get('id') not in selected_ids]
+                    
+                    # 选择部分未被选中的个体进行复活变异
+                    revival_count = min(len(unselected), max(1, int(self.cfg.pop_size * self.revival_ratio)))
+                    if unselected and revival_count > 0:
+                        import random
+                        revival_candidates = random.sample(unselected, revival_count)
+                        logging.info(f"=== Revival Mechanism: {len(revival_candidates)} candidates ===")
+                        
+                        revival_population = []
+                        for idx, ind in enumerate(revival_candidates):
+                            try:
+                                revival_ind = self.revival_mutate(ind)
+                                revival_population.append(revival_ind)
+                            except Exception as e:
+                                logging.warning(f"Revival mutation failed for individual {idx}: {e}")
+                        
+                        if revival_population:
+                            # 评估复活个体
+                            revival_population = self.evaluate_population(revival_population)
+                            
+                            # 注册复活个体到谱系追踪器
+                            for revival_ind in revival_population:
+                                if revival_ind.get('exec_success', False):
+                                    self.lineage_tracker.register_individual(revival_ind, parents=[ind])
+                            
+                            logging.info(f"Revival: {len(revival_population)} individuals created, "
+                                       f"{sum(1 for ind in revival_population if ind.get('exec_success', False))} successful")
+            else:
+                logging.info("=== Using Traditional Random Selection ===")
+                selected_population = self.random_select(population_to_select)
+            
             if selected_population is None:
                 raise RuntimeError("Selection failed. Please check the population.")
+            
             # Short-term reflection
-            short_term_reflection_tuple = self.short_term_reflection(selected_population) # (response_lst, worse_code_lst, better_code_lst)
+            short_term_reflection_tuple = self.short_term_reflection(selected_population)
+            
             # Crossover
             crossed_population = self.crossover(short_term_reflection_tuple)
+            
+            # 注册交叉后的个体到谱系追踪器
+            if self.enable_lineage_selection:
+                for idx, new_ind in enumerate(crossed_population):
+                    # 交叉产生的个体有两个父代
+                    parent_idx = idx * 2
+                    if parent_idx + 1 < len(selected_population):
+                        parents = [selected_population[parent_idx], selected_population[parent_idx + 1]]
+                        self.lineage_tracker.register_individual(new_ind, parents=parents)
+            
             # Evaluate
             self.population = self.evaluate_population(crossed_population)
+            
             # Update
             self.update_iter()
+            
+            # 记录谱系统计
+            if self.enable_lineage_selection and self.iteration % 5 == 0:
+                self.lineage_tracker.log_statistics()
+            
             # Long-term reflection
             self.long_term_reflection([response for response in short_term_reflection_tuple[0]])
+            
             # Mutate
             mutated_population = self.mutate()
+            
+            # 注册变异后的个体到谱系追踪器
+            if self.enable_lineage_selection and self.elitist is not None:
+                for mut_ind in mutated_population:
+                    self.lineage_tracker.register_individual(mut_ind, parents=[self.elitist])
+            
             # Evaluate
             self.population.extend(self.evaluate_population(mutated_population))
+            
             # Update
             self.update_iter()
 
